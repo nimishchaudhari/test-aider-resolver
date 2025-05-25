@@ -32,6 +32,9 @@ jobs:
             echo "ISSUE_NUMBER=${{ github.event.issue.number }}" >> $GITHUB_ENV
             echo "IS_PR=${{ github.event.issue.pull_request != '' }}" >> $GITHUB_ENV
             echo "COMMENT_ID=${{ github.event.comment.id }}" >> $GITHUB_ENV
+            echo "ISSUE_TITLE<<EOF" >> $GITHUB_ENV
+            echo "${{ github.event.issue.title }}" >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
           elif [[ "${{ github.event_name }}" == "pull_request_review_comment" ]]; then
             echo "COMMENT_BODY<<EOF" >> $GITHUB_ENV
             echo "${{ github.event.comment.body }}" >> $GITHUB_ENV
@@ -39,18 +42,27 @@ jobs:
             echo "PR_NUMBER=${{ github.event.pull_request.number }}" >> $GITHUB_ENV
             echo "IS_PR=true" >> $GITHUB_ENV
             echo "COMMENT_ID=${{ github.event.comment.id }}" >> $GITHUB_ENV
+            echo "ISSUE_TITLE<<EOF" >> $GITHUB_ENV
+            echo "${{ github.event.pull_request.title }}" >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
           elif [[ "${{ github.event_name }}" == "issues" ]]; then
             echo "ISSUE_BODY<<EOF" >> $GITHUB_ENV
             echo "${{ github.event.issue.body }}" >> $GITHUB_ENV
             echo "EOF" >> $GITHUB_ENV
             echo "ISSUE_NUMBER=${{ github.event.issue.number }}" >> $GITHUB_ENV
             echo "IS_PR=false" >> $GITHUB_ENV
+            echo "ISSUE_TITLE<<EOF" >> $GITHUB_ENV
+            echo "${{ github.event.issue.title }}" >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
           elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
             echo "PR_BODY<<EOF" >> $GITHUB_ENV
             echo "${{ github.event.pull_request.body }}" >> $GITHUB_ENV
             echo "EOF" >> $GITHUB_ENV
             echo "PR_NUMBER=${{ github.event.pull_request.number }}" >> $GITHUB_ENV
             echo "IS_PR=true" >> $GITHUB_ENV
+            echo "ISSUE_TITLE<<EOF" >> $GITHUB_ENV
+            echo "${{ github.event.pull_request.title }}" >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
           fi
 
       - name: Check for Aider mention
@@ -92,13 +104,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          INITIAL_RESPONSE="🤖 **Aider Bot is processing your request...**
+          INITIAL_RESPONSE="🤖 **Aider is analyzing your request...**
 
           **Request:** \`${{ env.COMMAND }}\`
           
-          ⏳ Setting up environment and analyzing code...
+          ⏳ Processing...
           
-          _This comment will be updated with progress and results._"
+          _This will be updated with my response shortly._"
           
           if [[ "${{ env.IS_PR }}" == "true" ]]; then
             PR_NUMBER="${{ env.PR_NUMBER }}"
@@ -147,16 +159,6 @@ jobs:
           git config user.name "Aider Bot"
           git config user.email "aider-bot@github.com"
           
-          # Update status
-          update_comment "🤖 **Aider Bot is processing your request...**
-
-          **Request:** \`${{ env.COMMAND }}\`
-          
-          ✅ Environment setup complete
-          🔄 Cloning repository and setting up workspace...
-          
-          _This comment will be updated with progress and results._"
-          
           # Create a unique branch name with timestamp
           TIMESTAMP=$(date +%Y%m%d%H%M%S)
           if [[ "${{ env.IS_PR }}" == "true" ]]; then
@@ -173,17 +175,6 @@ jobs:
           TEMPDIR=$(mktemp -d)
           cd $TEMPDIR
           git clone https://x-access-token:${{ env.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git .
-          
-          # Update status
-          update_comment "🤖 **Aider Bot is processing your request...**
-
-          **Request:** \`${{ env.COMMAND }}\`
-          
-          ✅ Environment setup complete
-          ✅ Repository cloned
-          🔄 Setting up branch and running Aider...
-          
-          _This comment will be updated with progress and results._"
           
           # For PR, checkout the PR branch
           if [[ "${{ env.IS_PR }}" == "true" ]]; then
@@ -230,27 +221,44 @@ jobs:
           fi
           
           # Create a proper home directory structure in the container
-          # This prevents the oauth-keys.env permission error
           CONTAINER_HOME="/tmp/aider_home"
           mkdir -p "$CONTAINER_HOME/.aider"
-          
-          # Create an empty oauth-keys.env file with proper permissions to prevent the error
           touch "$CONTAINER_HOME/.aider/oauth-keys.env"
           chmod 644 "$CONTAINER_HOME/.aider/oauth-keys.env"
           
-          # Update status
-          update_comment "🤖 **Aider Bot is processing your request...**
+          # Create context for Aider
+          CONTEXT_TYPE=""
+          CONTEXT_NUMBER=""
+          if [[ "${{ env.IS_PR }}" == "true" ]]; then
+            CONTEXT_TYPE="Pull Request"
+            CONTEXT_NUMBER="${{ env.PR_NUMBER }}"
+            if [[ -z "$CONTEXT_NUMBER" ]]; then
+              CONTEXT_NUMBER="${{ env.ISSUE_NUMBER }}"
+            fi
+          else
+            CONTEXT_TYPE="Issue"
+            CONTEXT_NUMBER="${{ env.ISSUE_NUMBER }}"
+          fi
+          
+          # Prepare the enhanced prompt
+          ENHANCED_PROMPT="You are Aider, an AI assistant helping with a GitHub $CONTEXT_TYPE #$CONTEXT_NUMBER titled '${{ env.ISSUE_TITLE }}' in repository ${{ github.repository }}.
 
-          **Request:** \`${{ env.COMMAND }}\`
+          Repository Context:
+          - Repository: ${{ github.repository }}
+          - $CONTEXT_TYPE: #$CONTEXT_NUMBER
+          - Title: ${{ env.ISSUE_TITLE }}
+          - User Request: ${{ env.COMMAND }}
+
+          Instructions:
+          1. Analyze the user's request carefully
+          2. If code changes are needed, implement them
+          3. Always provide a clear, helpful response explaining what you did or found
+          4. Be concise but thorough in your explanations
+          5. If you create or modify files, explain the changes clearly
+
+          User Request: ${{ env.COMMAND }}"
           
-          ✅ Environment setup complete
-          ✅ Repository cloned
-          ✅ Branch created: \`$BRANCH_NAME\`
-          🔄 Running Aider AI analysis...
-          
-          _This comment will be updated with progress and results._"
-          
-          # Run Aider in Docker with proper environment and file structure
+          # Run Aider in Docker with enhanced prompt
           set +e
           docker run --rm \
             -v "$(pwd):/app" \
@@ -265,168 +273,176 @@ jobs:
             --yes-always \
             --no-check-update \
             --env-file /dev/null \
-            --message "${{ env.COMMAND }}" \
+            --message "$ENHANCED_PROMPT" \
             > aider_output.txt 2>&1
           
           AIDER_EXIT_CODE=$?
           set -e
           
-          # Update with results
-          if [ $AIDER_EXIT_CODE -eq 0 ]; then
-            update_comment "🤖 **Aider Bot is processing your request...**
-
-            **Request:** \`${{ env.COMMAND }}\`
+          # Process Aider's output to extract the response
+          AIDER_RESPONSE=""
+          TECHNICAL_LOGS=""
+          
+          if [ -f aider_output.txt ]; then
+            # Extract the main response (everything after the last user message until technical info)
+            AIDER_RESPONSE=$(cat aider_output.txt | sed -n '/Aider v/,/Tokens:/p' | sed '1d;$d' | sed '/^$/d' | head -20)
+            TECHNICAL_LOGS=$(cat aider_output.txt)
             
-            ✅ Environment setup complete
-            ✅ Repository cloned
-            ✅ Branch created: \`$BRANCH_NAME\`
-            ✅ Aider AI analysis complete
-            🔄 Processing results and checking for changes...
-            
-            _This comment will be updated with progress and results._"
-          else
-            update_comment "🤖 **Aider Bot is processing your request...**
-
-            **Request:** \`${{ env.COMMAND }}\`
-            
-            ✅ Environment setup complete
-            ✅ Repository cloned
-            ✅ Branch created: \`$BRANCH_NAME\`
-            ❌ Aider AI encountered an error
-            
-            **Error Output:**
-            \`\`\`
-            $(cat aider_output.txt | tail -20)
-            \`\`\`
-            
-            _Processing complete with errors._"
-            
-            # Cleanup and exit
-            cd - > /dev/null
-            rm -rf $TEMPDIR
-            rm -rf $CONTAINER_HOME
-            exit 1
+            # If no clear response found, use a more generic extraction
+            if [[ -z "$AIDER_RESPONSE" || "$AIDER_RESPONSE" == *"Warning: Input is not terminal"* ]]; then
+              # Try to extract any meaningful content between the header and technical details
+              AIDER_RESPONSE=$(cat aider_output.txt | grep -v "Warning:" | grep -v "Aider v" | grep -v "Main model:" | grep -v "Weak model:" | grep -v "Git repo:" | grep -v "Repo-map:" | grep -v "https://aider.chat" | grep -v "Tokens:" | grep -v "Applied edit" | grep -v "Cost:" | sed '/^$/d' | head -10)
+            fi
           fi
           
-          # Check if there are changes to commit
-          if git status --porcelain | grep -q '^M\|^A\|^D'; then
-            # Changes detected, commit them
-            git add .
-            git commit -m "Changes by Aider Bot: ${{ env.COMMAND }}"
-            
-            # Update status
-            update_comment "🤖 **Aider Bot is processing your request...**
-
-            **Request:** \`${{ env.COMMAND }}\`
-            
-            ✅ Environment setup complete
-            ✅ Repository cloned
-            ✅ Branch created: \`$BRANCH_NAME\`
-            ✅ Aider AI analysis complete
-            ✅ Changes detected and committed
-            🔄 Creating pull request...
-            
-            _This comment will be updated with progress and results._"
-            
-            # For issues, create a new PR
-            if [[ "${{ env.IS_PR }}" == "false" ]]; then
-              git push origin $BRANCH_NAME
+          # Handle different scenarios
+          if [ $AIDER_EXIT_CODE -eq 0 ]; then
+            # Check if there are changes to commit
+            if git status --porcelain | grep -q '^M\|^A\|^D'; then
+              # Changes detected, commit them
+              git add .
+              git commit -m "🤖 Aider: ${{ env.COMMAND }}"
               
-              # Create a PR
-              PR_RESPONSE=$(curl -s -X POST \
-                -H "Authorization: token ${{ env.GITHUB_TOKEN }}" \
-                -H "Accept: application/vnd.github.v3+json" \
-                "https://api.github.com/repos/${{ github.repository }}/pulls" \
-                -d "{
-                  \"title\":\"🤖 Aider Bot: Changes for issue #${{ env.ISSUE_NUMBER }}\", 
-                  \"body\":\"This PR addresses changes requested in issue #${{ env.ISSUE_NUMBER }} using Aider AI.\\n\\n**Original request:** ${{ env.COMMAND }}\\n\\n**Aider Output:**\\n\\\`\\\`\\\`\\n$(cat aider_output.txt | head -50)\\n\\\`\\\`\\\`\", 
-                  \"head\":\"$BRANCH_NAME\", 
-                  \"base\":\"main\"
-                }")
+              # Get list of changed files
+              CHANGED_FILES=$(git diff --name-only HEAD~1)
               
-              PR_URL=$(echo $PR_RESPONSE | jq -r '.html_url')
-              PR_NUM=$(echo $PR_RESPONSE | jq -r '.number')
+              # For issues, create a new PR
+              if [[ "${{ env.IS_PR }}" == "false" ]]; then
+                git push origin $BRANCH_NAME
                 
-              # Final success update
-              update_comment "🤖 **Aider Bot - Processing Complete!** ✅
+                # Create a PR
+                PR_RESPONSE=$(curl -s -X POST \
+                  -H "Authorization: token ${{ env.GITHUB_TOKEN }}" \
+                  -H "Accept: application/vnd.github.v3+json" \
+                  "https://api.github.com/repos/${{ github.repository }}/pulls" \
+                  -d "{
+                    \"title\":\"🤖 Aider: ${{ env.COMMAND }}\", 
+                    \"body\":\"Resolves #${{ env.ISSUE_NUMBER }}\\n\\nImplemented by Aider AI based on the request: ${{ env.COMMAND }}\", 
+                    \"head\":\"$BRANCH_NAME\", 
+                    \"base\":\"main\"
+                  }")
+                
+                PR_URL=$(echo $PR_RESPONSE | jq -r '.html_url')
+                PR_NUM=$(echo $PR_RESPONSE | jq -r '.number')
+                
+                # Final success update
+                FINAL_RESPONSE="## 🤖 Aider's Response
 
-              **Request:** \`${{ env.COMMAND }}\`
-              
-              **Results:**
-              - ✅ Aider AI analysis completed successfully
-              - ✅ Changes committed to branch: \`$BRANCH_NAME\`
-              - ✅ Pull request created: [#$PR_NUM]($PR_URL)
-              
-              **Aider Output:**
-              \`\`\`
-              $(cat aider_output.txt | head -30)
-              \`\`\`
-              
-              Please review the pull request and merge when ready!"
-              
-            else
-              # For PRs, push to the new branch and create a PR to the original PR branch
-              git push origin $BRANCH_NAME
-              
-              PR_NUMBER="${{ env.PR_NUMBER }}"
-              if [[ -z "$PR_NUMBER" ]]; then
-                PR_NUMBER="${{ env.ISSUE_NUMBER }}"
+                I've successfully implemented your request: **${{ env.COMMAND }}**
+
+                ### What I did:
+                $(echo "$AIDER_RESPONSE" | sed 's/^/- /')
+
+                ### Files modified:
+                $(echo "$CHANGED_FILES" | sed 's/^/- /')
+
+                ### Next Steps:
+                I've created pull request [#$PR_NUM]($PR_URL) with the changes. Please review and merge when ready!
+
+                <details>
+                <summary>🔍 Technical Details</summary>
+
+                \`\`\`
+                $TECHNICAL_LOGS
+                \`\`\`
+
+                </details>"
+                
+              else
+                # For PRs, push to the new branch and create a PR to the original PR branch
+                git push origin $BRANCH_NAME
+                
+                PR_NUMBER="${{ env.PR_NUMBER }}"
+                if [[ -z "$PR_NUMBER" ]]; then
+                  PR_NUMBER="${{ env.ISSUE_NUMBER }}"
+                fi
+                
+                # Get the original PR's target branch
+                TARGET_BRANCH=$(curl -s -H "Authorization: token ${{ env.GITHUB_TOKEN }}" \
+                  "https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER" \
+                  | jq -r .base.ref)
+                  
+                # Create a PR to the original PR branch
+                NEW_PR_RESPONSE=$(curl -s -X POST \
+                  -H "Authorization: token ${{ env.GITHUB_TOKEN }}" \
+                  -H "Accept: application/vnd.github.v3+json" \
+                  "https://api.github.com/repos/${{ github.repository }}/pulls" \
+                  -d "{
+                    \"title\":\"🤖 Aider: ${{ env.COMMAND }}\", 
+                    \"body\":\"Related to PR #$PR_NUMBER\\n\\nImplemented by Aider AI based on the request: ${{ env.COMMAND }}\", 
+                    \"head\":\"$BRANCH_NAME\", 
+                    \"base\":\"$TARGET_BRANCH\"
+                  }")
+                
+                NEW_PR_URL=$(echo $NEW_PR_RESPONSE | jq -r '.html_url')
+                NEW_PR_NUM=$(echo $NEW_PR_RESPONSE | jq -r '.number')
+                
+                # Final success update
+                FINAL_RESPONSE="## 🤖 Aider's Response
+
+                I've successfully implemented your request: **${{ env.COMMAND }}**
+
+                ### What I did:
+                $(echo "$AIDER_RESPONSE" | sed 's/^/- /')
+
+                ### Files modified:
+                $(echo "$CHANGED_FILES" | sed 's/^/- /')
+
+                ### Next Steps:
+                I've created pull request [#$NEW_PR_NUM]($NEW_PR_URL) with the changes. Please review and merge when ready!
+
+                <details>
+                <summary>🔍 Technical Details</summary>
+
+                \`\`\`
+                $TECHNICAL_LOGS
+                \`\`\`
+
+                </details>"
               fi
-              
-              # Get the original PR's target branch
-              TARGET_BRANCH=$(curl -s -H "Authorization: token ${{ env.GITHUB_TOKEN }}" \
-                "https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER" \
-                | jq -r .base.ref)
-                
-              # Create a PR to the original PR branch
-              NEW_PR_RESPONSE=$(curl -s -X POST \
-                -H "Authorization: token ${{ env.GITHUB_TOKEN }}" \
-                -H "Accept: application/vnd.github.v3+json" \
-                "https://api.github.com/repos/${{ github.repository }}/pulls" \
-                -d "{
-                  \"title\":\"🤖 Aider Bot: Changes for PR #$PR_NUMBER\", 
-                  \"body\":\"This PR contains Aider's changes in response to a request in PR #$PR_NUMBER.\\n\\n**Original request:** ${{ env.COMMAND }}\\n\\n**Aider Output:**\\n\\\`\\\`\\\`\\n$(cat aider_output.txt | head -50)\\n\\\`\\\`\\\`\", 
-                  \"head\":\"$BRANCH_NAME\", 
-                  \"base\":\"$TARGET_BRANCH\"
-                }")
-              
-              NEW_PR_URL=$(echo $NEW_PR_RESPONSE | jq -r '.html_url')
-              NEW_PR_NUM=$(echo $NEW_PR_RESPONSE | jq -r '.number')
-              
-              # Final success update
-              update_comment "🤖 **Aider Bot - Processing Complete!** ✅
+            else
+              # No changes made, but provide helpful response
+              FINAL_RESPONSE="## 🤖 Aider's Response
 
-              **Request:** \`${{ env.COMMAND }}\`
-              
-              **Results:**
-              - ✅ Aider AI analysis completed successfully
-              - ✅ Changes committed to branch: \`$BRANCH_NAME\`
-              - ✅ Pull request created: [#$NEW_PR_NUM]($NEW_PR_URL)
-              
-              **Aider Output:**
+              I've analyzed your request: **${{ env.COMMAND }}**
+
+              ### My Analysis:
+              $(echo "$AIDER_RESPONSE" | sed 's/^/- /')
+
+              No code changes were needed for this request. The information above should help answer your question or provide the guidance you need.
+
+              <details>
+              <summary>🔍 Technical Details</summary>
+
               \`\`\`
-              $(cat aider_output.txt | head -30)
+              $TECHNICAL_LOGS
               \`\`\`
-              
-              Please review the pull request and merge when ready!"
+
+              </details>"
             fi
           else
-            # No changes made
-            update_comment "🤖 **Aider Bot - Processing Complete!** ℹ️
+            # Error occurred
+            FINAL_RESPONSE="## 🤖 Aider's Response
 
-            **Request:** \`${{ env.COMMAND }}\`
-            
-            **Results:**
-            - ✅ Aider AI analysis completed successfully
-            - ℹ️ No code changes were needed
-            
-            **Aider Output:**
+            I encountered an error while processing your request: **${{ env.COMMAND }}**
+
+            ### Error Details:
+            $(cat aider_output.txt | tail -10 | sed 's/^/- /')
+
+            Please check the technical details below or try rephrasing your request.
+
+            <details>
+            <summary>🔍 Technical Details</summary>
+
             \`\`\`
-            $(cat aider_output.txt)
+            $TECHNICAL_LOGS
             \`\`\`
-            
-            The request was processed but no file modifications were required."
+
+            </details>"
           fi
+          
+          # Update the comment with the final response
+          update_comment "$FINAL_RESPONSE"
           
           # Cleanup
           cd - > /dev/null
