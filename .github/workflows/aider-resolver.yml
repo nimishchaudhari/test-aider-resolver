@@ -176,10 +176,6 @@ jobs:
           cd $TEMPDIR
           git clone https://x-access-token:${{ env.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git .
           
-          # Record initial state
-          git status > before_status.txt
-          ls -la > before_files.txt
-          
           # For PR, checkout the PR branch
           if [[ "${{ env.IS_PR }}" == "true" ]]; then
             PR_NUMBER="${{ env.PR_NUMBER }}"
@@ -267,10 +263,6 @@ jobs:
           
           AIDER_EXIT_CODE=$?
           set -e
-          
-          # Record final state
-          git status > after_status.txt
-          ls -la > after_files.txt
           
           # Detect changes more accurately
           git add . 2>/dev/null || true
@@ -363,26 +355,26 @@ jobs:
                 
                 FINAL_RESPONSE="## 🤖 Aider's Response
 
-I've successfully implemented your request: **${{ env.COMMAND }}**
+                I've successfully implemented your request: **${{ env.COMMAND }}**
 
-### 📝 What I Did:
-$AIDER_RESPONSE
+                ### 📝 What I Did:
+                $AIDER_RESPONSE
 
-### 📁 Files Changed:
-$NEW_FILES_LIST
-$MODIFIED_FILES_LIST
+                ### 📁 Files Changed:
+                $NEW_FILES_LIST
+                $MODIFIED_FILES_LIST
 
-### 🚀 Next Steps:
-I've created pull request [#$PR_NUM]($PR_URL) with the changes. Please review and merge when ready!
+                ### 🚀 Next Steps:
+                I've created pull request [#$PR_NUM]($PR_URL) with the changes. Please review and merge when ready!
 
-<details>
-<summary>🔍 Technical Details</summary>
+                <details>
+                <summary>🔍 Technical Details</summary>
 
-\`\`\`
-$(cat aider_output.txt)
-\`\`\`
+                \`\`\`
+                $(cat aider_output.txt)
+                \`\`\`
 
-</details>"
+                </details>"
                 
               else
                 # For PRs
@@ -413,67 +405,67 @@ $(cat aider_output.txt)
                 
                 FINAL_RESPONSE="## 🤖 Aider's Response
 
-I've successfully implemented your request: **${{ env.COMMAND }}**
+                I've successfully implemented your request: **${{ env.COMMAND }}**
 
-### 📝 What I Did:
-$AIDER_RESPONSE
+                ### 📝 What I Did:
+                $AIDER_RESPONSE
 
-### 📁 Files Changed:
-$NEW_FILES_LIST
-$MODIFIED_FILES_LIST
+                ### 📁 Files Changed:
+                $NEW_FILES_LIST
+                $MODIFIED_FILES_LIST
 
-### 🚀 Next Steps:
-I've created pull request [#$NEW_PR_NUM]($NEW_PR_URL) with the changes. Please review and merge when ready!
+                ### 🚀 Next Steps:
+                I've created pull request [#$NEW_PR_NUM]($NEW_PR_URL) with the changes. Please review and merge when ready!
 
-<details>
-<summary>🔍 Technical Details</summary>
+                <details>
+                <summary>🔍 Technical Details</summary>
 
-\`\`\`
-$(cat aider_output.txt)
-\`\`\`
+                \`\`\`
+                $(cat aider_output.txt)
+                \`\`\`
 
-</details>"
+                </details>"
               fi
             else
               # No changes made
               FINAL_RESPONSE="## 🤖 Aider's Response
 
-I've analyzed your request: **${{ env.COMMAND }}**
+              I've analyzed your request: **${{ env.COMMAND }}**
 
-### 💭 My Response:
-$AIDER_RESPONSE
+              ### 💭 My Response:
+              $AIDER_RESPONSE
 
-### ℹ️ Note:
-No file changes were needed for this request. The information above should help with your question or provide the guidance you need.
+              ### ℹ️ Note:
+              No file changes were needed for this request. The information above should help with your question or provide the guidance you need.
 
-<details>
-<summary>🔍 Technical Details</summary>
+              <details>
+              <summary>🔍 Technical Details</summary>
 
-\`\`\`
-$(cat aider_output.txt)
-\`\`\`
+              \`\`\`
+              $(cat aider_output.txt)
+              \`\`\`
 
-</details>"
+              </details>"
             fi
           else
             # Error occurred
             FINAL_RESPONSE="## 🤖 Aider's Response
 
-I encountered an error while processing your request: **${{ env.COMMAND }}**
+            I encountered an error while processing your request: **${{ env.COMMAND }}**
 
-### ⚠️ Error Details:
-$(cat aider_output.txt | tail -10 | sed 's/^/- /')
+            ### ⚠️ Error Details:
+            $(cat aider_output.txt | tail -10 | sed 's/^/- /')
 
-Please check the technical details below or try rephrasing your request.
+            Please check the technical details below or try rephrasing your request.
 
-<details>
-<summary>🔍 Technical Details</summary>
+            <details>
+            <summary>🔍 Technical Details</summary>
 
-\`\`\`
-$(cat aider_output.txt)
-\`\`\`
+            \`\`\`
+            $(cat aider_output.txt)
+            \`\`\`
 
-</details>"
+            </details>"
           fi
           
           # Update the comment with the final response
