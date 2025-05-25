@@ -1,0 +1,290 @@
+name: Aider Resolver
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  issues:
+    types: [opened, edited]
+  pull_request:
+    types: [opened, edited, synchronize]
+
+jobs:
+  process-with-aider:
+    runs-on: ubuntu-latest
+    # Skip if the comment was made by a bot (prevents loops)
+    if: ${{ !contains(github.actor, '[bot]') && github.event.comment.user.type != 'Bot' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for context
+
+      - name: Extract event information
+        id: extract-event
+        run: |
+          echo "EVENT_TYPE=${{ github.event_name }}" >> $GITHUB_ENV
+          if [[ "${{ github.event_name }}" == "issue_comment" ]]; then
+            echo "COMMENT_BODY<<EOF" >> $GITHUB_ENV
+            echo "${{ github.event.comment.body }}" >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
+            echo "ISSUE_NUMBER=${{ github.event.issue.number }}" >> $GITHUB_ENV
+            echo "IS_PR=${{ github.event.issue.pull_request != '' }}" >> $GITHUB_ENV
+          elif [[ "${{ github.event_name }}" == "pull_request_review_comment" ]]; then
+            echo "COMMENT_BODY<<EOF" >> $GITHUB_ENV
+            echo "${{ github.event.comment.body }}" >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
+            echo "PR_NUMBER=${{ github.event.pull_request.number }}" >> $GITHUB_ENV
+            echo "IS_PR=true" >> $GITHUB_ENV
+          elif [[ "${{ github.event_name }}" == "issues" ]]; then
+            echo "ISSUE_BODY<<EOF" >> $GITHUB_ENV
+            echo "${{ github.event.issue.body }}" >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
+            echo "ISSUE_NUMBER=${{ github.event.issue.number }}" >> $GITHUB_ENV
+            echo "IS_PR=false" >> $GITHUB_ENV
+          elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "PR_BODY<<EOF" >> $GITHUB_ENV
+            echo "${{ github.event.pull_request.body }}" >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
+            echo "PR_NUMBER=${{ github.event.pull_request.number }}" >> $GITHUB_ENV
+            echo "IS_PR=true" >> $GITHUB_ENV
+          fi
+
+      - name: Check for Aider mention
+        id: check-mention
+        run: |
+          SHOULD_RUN=false
+          COMMAND=""
+          
+          if [[ "${{ env.EVENT_TYPE }}" == "issue_comment" || "${{ env.EVENT_TYPE }}" == "pull_request_review_comment" ]]; then
+            if echo "${{ env.COMMENT_BODY }}" | grep -q "@aider"; then
+              SHOULD_RUN=true
+              COMMAND=$(echo "${{ env.COMMENT_BODY }}" | sed -n "s/.*@aider\s*\(.*\)/\1/p")
+            fi
+          elif [[ "${{ env.EVENT_TYPE }}" == "issues" ]]; then
+            if echo "${{ env.ISSUE_BODY }}" | grep -q "@aider"; then
+              SHOULD_RUN=true
+              COMMAND=$(echo "${{ env.ISSUE_BODY }}" | sed -n "s/.*@aider\s*\(.*\)/\1/p")
+            fi
+          elif [[ "${{ env.EVENT_TYPE }}" == "pull_request" ]]; then
+            if echo "${{ env.PR_BODY }}" | grep -q "@aider"; then
+              SHOULD_RUN=true
+              COMMAND=$(echo "${{ env.PR_BODY }}" | sed -n "s/.*@aider\s*\(.*\)/\1/p")
+            fi
+          fi
+          
+          echo "SHOULD_RUN=$SHOULD_RUN" >> $GITHUB_ENV
+          echo "COMMAND<<EOF" >> $GITHUB_ENV
+          echo "$COMMAND" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+      - name: Setup Docker
+        if: env.SHOULD_RUN == 'true'
+        run: |
+          docker pull paulgauthier/aider-full
+
+      - name: Process with Aider
+        if: env.SHOULD_RUN == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          AIDER_MODEL: ${{ vars.AIDER_MODEL || 'gpt-4o' }}
+          AIDER_CONFIG: ${{ vars.AIDER_CONFIG || '' }}
+          AIDER_EDIT_FORMAT: ${{ vars.AIDER_EDIT_FORMAT || 'md' }}
+          AIDER_3P_PROVIDER: ${{ vars.AIDER_3P_PROVIDER || '' }}
+          AIDER_BASE_URL: ${{ vars.AIDER_BASE_URL || '' }}
+          AIDER_API_VERSION: ${{ vars.AIDER_API_VERSION || '' }}
+        run: |
+          # Set up Git config
+          git config user.name "Aider Bot"
+          git config user.email "aider-bot@github.com"
+          
+          # Create a unique branch name with timestamp
+          TIMESTAMP=$(date +%Y%m%d%H%M%S)
+          if [[ "${{ env.IS_PR }}" == "true" ]]; then
+            PR_NUMBER="${{ env.PR_NUMBER }}"
+            if [[ -z "$PR_NUMBER" ]]; then
+              PR_NUMBER="${{ env.ISSUE_NUMBER }}"
+            fi
+            BRANCH_NAME="aider/pr-${PR_NUMBER}-${TIMESTAMP}"
+          else
+            BRANCH_NAME="aider/issue-${{ env.ISSUE_NUMBER }}-${TIMESTAMP}"
+          fi
+          
+          # Clone the repository and set up working environment
+          TEMPDIR=$(mktemp -d)
+          cd $TEMPDIR
+          git clone https://x-access-token:${{ env.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git .
+          
+          # For PR, checkout the PR branch
+          if [[ "${{ env.IS_PR }}" == "true" ]]; then
+            PR_NUMBER="${{ env.PR_NUMBER }}"
+            if [[ -z "$PR_NUMBER" ]]; then
+              PR_NUMBER="${{ env.ISSUE_NUMBER }}"
+            fi
+            
+            PR_REF=$(curl -s -H "Authorization: token ${{ env.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER" \
+              | jq -r .head.ref)
+              
+            if [[ "$PR_REF" != "null" && "$PR_REF" != "" ]]; then
+              git checkout $PR_REF || git checkout -b $BRANCH_NAME
+            else
+              git checkout -b $BRANCH_NAME
+            fi
+          else
+            # For issues, create a new branch
+            git checkout -b $BRANCH_NAME
+          fi
+
+          # Prepare aider command with all environment variables
+          AIDER_CMD="--model ${{ env.AIDER_MODEL }}"
+          
+          # Add additional configuration if specified
+          if [[ -n "${{ env.AIDER_CONFIG }}" ]]; then
+            AIDER_CMD="$AIDER_CMD ${{ env.AIDER_CONFIG }}"
+          fi
+          
+          # Add edit format if specified
+          if [[ -n "${{ env.AIDER_EDIT_FORMAT }}" ]]; then
+            AIDER_CMD="$AIDER_CMD --edit-format ${{ env.AIDER_EDIT_FORMAT }}"
+          fi
+          
+          # Add 3P provider configuration if specified
+          if [[ -n "${{ env.AIDER_3P_PROVIDER }}" ]]; then
+            AIDER_CMD="$AIDER_CMD --3p-provider ${{ env.AIDER_3P_PROVIDER }}"
+          fi
+          
+          # Add base URL if specified
+          if [[ -n "${{ env.AIDER_BASE_URL }}" ]]; then
+            AIDER_CMD="$AIDER_CMD --openai-api-base ${{ env.AIDER_BASE_URL }}"
+          fi
+          
+          # Add API version if specified
+          if [[ -n "${{ env.AIDER_API_VERSION }}" ]]; then
+            AIDER_CMD="$AIDER_CMD --openai-api-version ${{ env.AIDER_API_VERSION }}"
+          fi
+          
+          # Create a response file
+          echo "### Aider Response" > response.md
+          echo "Processing request: \`${{ env.COMMAND }}\`..." >> response.md
+          echo "" >> response.md
+          
+          # Run Aider in Docker
+          set +e
+          docker run --rm \
+            -v "$(pwd):/app" \
+            -e OPENAI_API_KEY=${{ env.OPENAI_API_KEY }} \
+            paulgauthier/aider-full \
+            $AIDER_CMD \
+            --no-git \
+            --non-interactive \
+            --message "${{ env.COMMAND }}" \
+            > aider_output.txt 2>&1
+          
+          AIDER_EXIT_CODE=$?
+          set -e
+          
+          # Append Aider output to response
+          echo "#### Output" >> response.md
+          echo '```' >> response.md
+          cat aider_output.txt >> response.md
+          echo '```' >> response.md
+          
+          # Handle exit code
+          if [ $AIDER_EXIT_CODE -ne 0 ]; then
+            echo "" >> response.md
+            echo "⚠️ Aider encountered an error (exit code: $AIDER_EXIT_CODE)" >> response.md
+          fi
+          
+          # Post the response as a comment
+          RESPONSE_FILE=$(cat response.md)
+          if [[ "${{ env.IS_PR }}" == "true" ]]; then
+            PR_NUMBER="${{ env.PR_NUMBER }}"
+            if [[ -z "$PR_NUMBER" ]]; then
+              PR_NUMBER="${{ env.ISSUE_NUMBER }}"
+            fi
+            
+            curl -X POST \
+              -H "Authorization: token ${{ env.GITHUB_TOKEN }}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              "https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments" \
+              -d "{\"body\":$(echo "$RESPONSE_FILE" | jq -R -s .)}"
+          else
+            curl -X POST \
+              -H "Authorization: token ${{ env.GITHUB_TOKEN }}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              "https://api.github.com/repos/${{ github.repository }}/issues/${{ env.ISSUE_NUMBER }}/comments" \
+              -d "{\"body\":$(echo "$RESPONSE_FILE" | jq -R -s .)}"
+          fi
+          
+          # Check if there are changes to commit
+          if git status --porcelain | grep -q '^M\|^A\|^D'; then
+            # Changes detected, commit them
+            git add .
+            git commit -m "Changes by Aider Bot: ${{ env.COMMAND }}"
+            
+            # For issues, create a new PR
+            if [[ "${{ env.IS_PR }}" == "false" ]]; then
+              git push origin $BRANCH_NAME
+              
+              # Create a PR
+              PR_RESPONSE=$(curl -X POST \
+                -H "Authorization: token ${{ env.GITHUB_TOKEN }}" \
+                -H "Accept: application/vnd.github.v3+json" \
+                "https://api.github.com/repos/${{ github.repository }}/pulls" \
+                -d "{
+                  \"title\":\"Aider Bot: Changes for issue #${{ env.ISSUE_NUMBER }}\", 
+                  \"body\":\"This PR addresses changes requested in issue #${{ env.ISSUE_NUMBER }} using Aider.\\n\\nOriginal request: ${{ env.COMMAND }}\", 
+                  \"head\":\"$BRANCH_NAME\", 
+                  \"base\":\"main\"
+                }")
+              
+              PR_URL=$(echo $PR_RESPONSE | jq -r '.html_url')
+                
+              # Comment on the issue with the PR link
+              curl -X POST \
+                -H "Authorization: token ${{ env.GITHUB_TOKEN }}" \
+                -H "Accept: application/vnd.github.v3+json" \
+                "https://api.github.com/repos/${{ github.repository }}/issues/${{ env.ISSUE_NUMBER }}/comments" \
+                -d "{\"body\":\"I've created a pull request with the changes: $PR_URL\"}"
+            else
+              # For PRs, push to the new branch and create a PR to the original PR branch
+              git push origin $BRANCH_NAME
+              
+              PR_NUMBER="${{ env.PR_NUMBER }}"
+              if [[ -z "$PR_NUMBER" ]]; then
+                PR_NUMBER="${{ env.ISSUE_NUMBER }}"
+              fi
+              
+              # Get the original PR's target branch
+              TARGET_BRANCH=$(curl -s -H "Authorization: token ${{ env.GITHUB_TOKEN }}" \
+                "https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER" \
+                | jq -r .base.ref)
+                
+              # Create a PR to the original PR branch
+              curl -X POST \
+                -H "Authorization: token ${{ env.GITHUB_TOKEN }}" \
+                -H "Accept: application/vnd.github.v3+json" \
+                "https://api.github.com/repos/${{ github.repository }}/pulls" \
+                -d "{
+                  \"title\":\"Aider Bot: Changes for PR #$PR_NUMBER\", 
+                  \"body\":\"This PR contains Aider's changes in response to a request in PR #$PR_NUMBER.\\n\\nOriginal request: ${{ env.COMMAND }}\", 
+                  \"head\":\"$BRANCH_NAME\", 
+                  \"base\":\"$TARGET_BRANCH\"
+                }"
+              
+              # Comment on the PR about the changes
+              curl -X POST \
+                -H "Authorization: token ${{ env.GITHUB_TOKEN }}" \
+                -H "Accept: application/vnd.github.v3+json" \
+                "https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments" \
+                -d "{\"body\":\"I've pushed my changes to branch \`$BRANCH_NAME\` and created a PR for review.\"}"
+            fi
+          else
+            echo "No changes were made by Aider." >> response.md
+          fi
+          
+          # Cleanup
+          cd - > /dev/null
+          rm -rf $TEMPDIR

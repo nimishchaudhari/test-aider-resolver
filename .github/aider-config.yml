@@ -1,0 +1,32 @@
+# Aider Resolver Configuration
+# This file controls the behavior of the Aider Resolver GitHub Action
+
+# Default model to use (can be overridden with AIDER_MODEL env var)
+model: gpt-4o
+
+# Edit format (md or diff)
+edit_format: md
+
+# User mentions that can trigger the action (leave empty to allow any user)
+allowed_users:
+  - # Add usernames here
+
+# Repository paths that Aider is allowed to modify
+# Leave empty to allow all paths
+allowed_paths:
+  - # Add path patterns here
+
+# Repository paths that Aider is NOT allowed to modify
+excluded_paths:
+  - .github/workflows/
+  - security/
+  - config/credentials.yml
+
+# Max tokens to use in context
+max_tokens: 8192
+
+# Whether to allow Aider to create new files
+allow_creating_files: true
+
+# Whether to allow Aider to delete files
+allow_deleting_files: true
