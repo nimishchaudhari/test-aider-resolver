@@ -206,7 +206,7 @@ jobs:
             git checkout -b $BRANCH_NAME
           fi
 
-          # Prepare aider command with required flags to avoid permission issues
+          # Prepare aider command with required flags
           AIDER_CMD="--model ${{ env.AIDER_MODEL }} --openai-api-key ${{ env.OPENAI_API_KEY }}"
           
           # Add additional configuration if specified
@@ -229,8 +229,14 @@ jobs:
             AIDER_CMD="$AIDER_CMD --openai-api-version ${{ env.AIDER_API_VERSION }}"
           fi
           
-          # Create temporary home directory to avoid permission issues
-          mkdir -p /tmp/aider_home/.aider
+          # Create a proper home directory structure in the container
+          # This prevents the oauth-keys.env permission error
+          CONTAINER_HOME="/tmp/aider_home"
+          mkdir -p "$CONTAINER_HOME/.aider"
+          
+          # Create an empty oauth-keys.env file with proper permissions to prevent the error
+          touch "$CONTAINER_HOME/.aider/oauth-keys.env"
+          chmod 644 "$CONTAINER_HOME/.aider/oauth-keys.env"
           
           # Update status
           update_comment "🤖 **Aider Bot is processing your request...**
@@ -244,11 +250,11 @@ jobs:
           
           _This comment will be updated with progress and results._"
           
-          # Run Aider in Docker with proper environment
+          # Run Aider in Docker with proper environment and file structure
           set +e
           docker run --rm \
             -v "$(pwd):/app" \
-            -v "/tmp/aider_home:/home/aider" \
+            -v "$CONTAINER_HOME:/home/aider" \
             -e HOME=/home/aider \
             -e OPENAI_API_KEY=${{ env.OPENAI_API_KEY }} \
             -w /app \
@@ -258,6 +264,7 @@ jobs:
             --no-git \
             --yes-always \
             --no-check-update \
+            --env-file /dev/null \
             --message "${{ env.COMMAND }}" \
             > aider_output.txt 2>&1
           
@@ -297,6 +304,7 @@ jobs:
             # Cleanup and exit
             cd - > /dev/null
             rm -rf $TEMPDIR
+            rm -rf $CONTAINER_HOME
             exit 1
           fi
           
@@ -423,3 +431,4 @@ jobs:
           # Cleanup
           cd - > /dev/null
           rm -rf $TEMPDIR
+          rm -rf $CONTAINER_HOME
